@@ -1,5 +1,6 @@
 import logging
-
+from typing import Annotated
+import json
 from dotenv import load_dotenv
 from livekit.agents import (
     Agent,
@@ -12,7 +13,7 @@ from livekit.agents import (
     cli,
     metrics,
     tokenize,
-    # function_tool,
+    function_tool,
     # RunContext
 )
 from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
@@ -26,12 +27,55 @@ load_dotenv(".env.local")
 class Assistant(Agent):
     def __init__(self) -> None:
         super().__init__(
-            instructions="""You are a helpful voice AI assistant. The user is interacting with you via voice, even if you perceive the conversation as text.
-            You eagerly assist users with their questions by providing information from your extensive knowledge.
-            Your responses are concise, to the point, and without any complex formatting or punctuation including emojis, asterisks, or other symbols.
-            You are curious, friendly, and have a sense of humor.""",
+            instructions="""You are Alex, a friendly and energetic barista at 'Neural Brews Coffee'.
+            Your job is to take orders efficiently and kindly.
+            Keep your responses short and conversational (spoken word style).
+            
+            Menu:
+            - Espresso ($3)
+            - Latte ($4.50)
+            - Cappuccino ($4.50)
+            - Cold Brew ($5)
+            - Blueberry Muffin ($3.50)
+            
+            Protocol:
+            1. Always ask for the customer's name for the cup.
+            2. If they order a drink, ask if they want it Hot or Iced.
+            3. Once the order is complete, confirm the total price.
+            Once the customer CONFIRMS the order, you MUST use the 'save_order' tool.
+            4. After the tool runs, say 'Thanks [Name], your order is coming right up!""",
         )
+        
+        # ... inside class Assistant(Agent) ...
 
+    @function_tool
+    def save_order(
+        self,
+        items: Annotated[str, "The list of specific items the customer ordered"],
+        total_price: Annotated[str, "The total price of the order"]
+    ):
+        """
+        Call this tool ONLY when the customer explicitly confirms their order.
+        It creates a file named order.json with the details.
+        """
+        # 1. Create the data structure
+        order_data = {
+            "items": items,
+            "total": total_price,
+            "status": "confirmed"
+        }
+
+        # 2. Write it to a file named 'order.json'
+        try:
+            with open("order.json", "w") as f:
+                json.dump(order_data, f, indent=4)
+            
+            # Still log it so you see it in the terminal too
+            logger.info(f"ORDER SAVED TO FILE: {order_data}")
+            return "Order saved to file successfully."
+        except Exception as e:
+            logger.error(f"Failed to save file: {e}")
+            return "There was an error saving the order file."
     # To add tools, use the @function_tool decorator.
     # Here's an example that adds a simple weather tool.
     # You also have to add `from livekit.agents import function_tool, RunContext` to the top of this file
