@@ -1,7 +1,10 @@
 import logging
-from typing import Annotated
 import json
+import os
+from datetime import datetime
+from typing import Annotated
 from dotenv import load_dotenv
+
 from livekit.agents import (
     Agent,
     AgentSession,
@@ -26,72 +29,99 @@ load_dotenv(".env.local")
 
 class Assistant(Agent):
     def __init__(self) -> None:
+        # 1. READ MEMORY: Check if we have previous data to reference
+        past_context = ""
+        file_path = "wellness.json"
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r") as f:
+                    data = json.load(f)
+                    if data and len(data) > 0:
+                        last_entry = data[-1] # Get the most recent entry
+                        past_context = (
+                            f"CONTEXT FROM LAST SESSION: "
+                            f"On {last_entry.get('timestamp', 'unknown date')}, "
+                            f"the user felt '{last_entry.get('mood', 'unknown')}' "
+                            f"with energy level '{last_entry.get('energy', 'unknown')}'. "
+                            f"Their goal was: '{last_entry.get('objectives', 'unknown')}'."
+                            f"Start the conversation by briefly mentioning this."
+                        )
+            except Exception:
+                past_context = "No previous records found. This is your first session."
+
         super().__init__(
-            instructions="""You are Alex, a friendly and energetic barista at 'Neural Brews Coffee'.
-            Your job is to take orders efficiently and kindly.
-            Keep your responses short and conversational (spoken word style).
+            instructions=f"""You are Coach Alex, a supportive and empathetic Health & Wellness Companion.
+            Your goal is to perform a Daily Check-in with the user.
             
-            Menu:
-            - Espresso ($3)
-            - Latte ($4.50)
-            - Cappuccino ($4.50)
-            - Cold Brew ($5)
-            - Blueberry Muffin ($3.50)
-            
-            Protocol:
-            1. Always ask for the customer's name for the cup.
-            2. If they order a drink, ask if they want it Hot or Iced.
-            3. Once the order is complete, confirm the total price.
-            Once the customer CONFIRMS the order, you MUST use the 'save_order' tool.
-            4. After the tool runs, say 'Thanks [Name], your order is coming right up!""",
+            {past_context}
+
+            FOLLOW THIS SCRIPT FLOW:
+            1. **Mood & Energy:** Ask "How are you feeling today?" and "What is your energy like?".
+            2. **Intentions:** Ask "What are 1-3 things you want to get done today?".
+            3. **Advice:** Offer simple, realistic advice (e.g., take a walk, drink water).
+            4. **Recap:** Summarize their mood and goals back to them.
+            5. **SAVE:** Once they confirm the recap, call the 'log_daily_checkin' tool.
+
+            CAPABILITIES:
+            - If they ask about weight/height, use the 'calculate_bmi' tool.
+            - Do NOT diagnose medical conditions.
+            - Keep responses warm but concise.
+            """,
         )
-        
-        # ... inside class Assistant(Agent) ...
 
     @function_tool
-    def save_order(
+    async def calculate_bmi(
         self,
-        items: Annotated[str, "The list of specific items the customer ordered"],
-        total_price: Annotated[str, "The total price of the order"]
+        weight_kg: Annotated[float, "The user's weight in kilograms"],
+        height_cm: Annotated[float, "The user's height in centimeters"],
     ):
-        """
-        Call this tool ONLY when the customer explicitly confirms their order.
-        It creates a file named order.json with the details.
-        """
-        # 1. Create the data structure
-        order_data = {
-            "items": items,
-            "total": total_price,
-            "status": "confirmed"
-        }
+        """Calculate Body Mass Index (BMI) from height and weight."""
+        height_m = height_cm / 100
+        bmi = weight_kg / (height_m ** 2)
+        bmi = round(bmi, 1)
+        
+        category = ""
+        if bmi < 18.5: category = "underweight"
+        elif bmi < 25: category = "healthy weight"
+        elif bmi < 30: category = "overweight"
+        else: category = "obese"
 
-        # 2. Write it to a file named 'order.json'
-        try:
-            with open("order.json", "w") as f:
-                json.dump(order_data, f, indent=4)
-            
-            # Still log it so you see it in the terminal too
-            logger.info(f"ORDER SAVED TO FILE: {order_data}")
-            return "Order saved to file successfully."
-        except Exception as e:
-            logger.error(f"Failed to save file: {e}")
-            return "There was an error saving the order file."
-    # To add tools, use the @function_tool decorator.
-    # Here's an example that adds a simple weather tool.
-    # You also have to add `from livekit.agents import function_tool, RunContext` to the top of this file
-    # @function_tool
-    # async def lookup_weather(self, context: RunContext, location: str):
-    #     """Use this tool to look up current weather information in the given location.
-    #
-    #     If the location is not supported by the weather service, the tool will indicate this. You must tell the user the location's weather is unavailable.
-    #
-    #     Args:
-    #         location: The location to look up weather information for (e.g. city name)
-    #     """
-    #
-    #     logger.info(f"Looking up weather for {location}")
-    #
-    #     return "sunny with a temperature of 70 degrees."
+        return f"The BMI is {bmi}, which is considered {category}."
+
+    @function_tool
+    async def log_daily_checkin(
+        self,
+        mood: Annotated[str, "Summary of the user's mood"],
+        energy: Annotated[str, "User's energy level"],
+        objectives: Annotated[str, "The user's main goals for the day"],
+    ):
+        """Save the daily check-in summary (mood, energy, objectives) to a JSON file."""
+        file_path = "wellness.json"
+        
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        new_entry = {
+            "timestamp": timestamp,
+            "type": "daily_checkin",
+            "mood": mood,
+            "energy": energy,
+            "objectives": objectives
+        }
+        
+        logger.info(f"Saving Check-in: {new_entry}")
+
+        data = []
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r") as f:
+                    data = json.load(f)
+            except Exception:
+                data = []
+
+        data.append(new_entry)
+        with open(file_path, "w") as f:
+            json.dump(data, f, indent=2)
+
+        return "Check-in saved successfully! Wishing you a great day ahead."
 
 
 def prewarm(proc: JobProcess):
@@ -132,16 +162,6 @@ async def entrypoint(ctx: JobContext):
         preemptive_generation=True,
     )
 
-    # To use a realtime model instead of a voice pipeline, use the following session setup instead.
-    # (Note: This is for the OpenAI Realtime API. For other providers, see https://docs.livekit.io/agents/models/realtime/))
-    # 1. Install livekit-agents[openai]
-    # 2. Set OPENAI_API_KEY in .env.local
-    # 3. Add `from livekit.plugins import openai` to the top of this file
-    # 4. Use the following session setup instead of the version above
-    # session = AgentSession(
-    #     llm=openai.realtime.RealtimeModel(voice="marin")
-    # )
-
     # Metrics collection, to measure pipeline performance
     # For more information, see https://docs.livekit.io/agents/build/metrics/
     usage_collector = metrics.UsageCollector()
@@ -156,14 +176,6 @@ async def entrypoint(ctx: JobContext):
         logger.info(f"Usage: {summary}")
 
     ctx.add_shutdown_callback(log_usage)
-
-    # # Add a virtual avatar to the session, if desired
-    # # For other providers, see https://docs.livekit.io/agents/models/avatar/
-    # avatar = hedra.AvatarSession(
-    #   avatar_id="...",  # See https://docs.livekit.io/agents/models/avatar/plugins/hedra
-    # )
-    # # Start the avatar and wait for it to join
-    # await avatar.start(session, room=ctx.room)
 
     # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
