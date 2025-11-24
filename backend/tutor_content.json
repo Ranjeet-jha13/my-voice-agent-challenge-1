@@ -1,0 +1,16 @@
+[
+  {
+    "id": "variables",
+    "title": "Variables",
+    "summary": "Think of a variable like a labeled box. You can put data inside it, like a number or a name, and look inside the box later to use that data.",
+    "quiz_question": "If I have a box labeled 'score' and I put the number 10 inside, what happens if I put 20 inside later? Does it hold both, or just 20?",
+    "teach_back_prompt": "Okay, pretend I'm 5 years old. Explain to me what a variable is using a toy box analogy."
+  },
+  {
+    "id": "loops",
+    "title": "Loops",
+    "summary": "A loop is like a song on repeat. It lets the computer do the same task over and over again until a condition changes, like counting to 10.",
+    "quiz_question": "What is the main difference between a 'For Loop' (which counts) and a 'While Loop' (which waits)?",
+    "teach_back_prompt": "Tell me how you would use a loop to make a robot clap its hands 5 times."
+  }
+]

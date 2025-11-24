@@ -1,7 +1,5 @@
 import logging
 import json
-import os
-from datetime import datetime
 from typing import Annotated
 from dotenv import load_dotenv
 
@@ -10,186 +8,122 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     JobProcess,
-    MetricsCollectedEvent,
-    RoomInputOptions,
     WorkerOptions,
     cli,
     metrics,
     tokenize,
-    function_tool,
-    # RunContext
+    function_tool, 
+    RoomInputOptions,# <--- WE ARE USING THIS NOW
 )
 from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
+load_dotenv(".env.local")
 logger = logging.getLogger("agent")
 
-load_dotenv(".env.local")
+# --- 1. LOAD CONTENT ---
+try:
+    with open("tutor_content.json", "r") as f:
+        TUTOR_CONTENT = json.load(f)
+except FileNotFoundError:
+    # Fallback content if file is missing
+    TUTOR_CONTENT = [
+        {"id": "variables", "title": "Variables", "summary": "Variables are like boxes for data.", "quiz_question": "What is a variable?", "teach_back_prompt": "Explain variables like I am 5."},
+        {"id": "loops", "title": "Loops", "summary": "Loops repeat actions.", "quiz_question": "What does a loop do?", "teach_back_prompt": "How would you use a loop to clap hands?"}
+    ]
 
-
-class Assistant(Agent):
-    def __init__(self) -> None:
-        # 1. READ MEMORY: Check if we have previous data to reference
-        past_context = ""
-        file_path = "wellness.json"
-        if os.path.exists(file_path):
-            try:
-                with open(file_path, "r") as f:
-                    data = json.load(f)
-                    if data and len(data) > 0:
-                        last_entry = data[-1] # Get the most recent entry
-                        past_context = (
-                            f"CONTEXT FROM LAST SESSION: "
-                            f"On {last_entry.get('timestamp', 'unknown date')}, "
-                            f"the user felt '{last_entry.get('mood', 'unknown')}' "
-                            f"with energy level '{last_entry.get('energy', 'unknown')}'. "
-                            f"Their goal was: '{last_entry.get('objectives', 'unknown')}'."
-                            f"Start the conversation by briefly mentioning this."
-                        )
-            except Exception:
-                past_context = "No previous records found. This is your first session."
-
+class TutorAgent(Agent):
+    def __init__(self):
         super().__init__(
-            instructions=f"""You are Coach Alex, a supportive and empathetic Health & Wellness Companion.
-            Your goal is to perform a Daily Check-in with the user.
+            instructions="""You are the Receptionist at 'Neural Academy'.
             
-            {past_context}
-
-            FOLLOW THIS SCRIPT FLOW:
-            1. **Mood & Energy:** Ask "How are you feeling today?" and "What is your energy like?".
-            2. **Intentions:** Ask "What are 1-3 things you want to get done today?".
-            3. **Advice:** Offer simple, realistic advice (e.g., take a walk, drink water).
-            4. **Recap:** Summarize their mood and goals back to them.
-            5. **SAVE:** Once they confirm the recap, call the 'log_daily_checkin' tool.
-
-            CAPABILITIES:
-            - If they ask about weight/height, use the 'calculate_bmi' tool.
-            - Do NOT diagnose medical conditions.
-            - Keep responses warm but concise.
+            YOUR FLOW:
+            1. Greet the user and ask for a mode (Learn, Quiz, Teach-Back).
+            2. When the user picks a mode, call the tool ONE TIME.
+            3. IMPORTANT: After the tool returns the "SYSTEM UPDATE", do NOT call the tool again. 
+               Instead, immediately ADOPT the new persona and SPEAK to the user based on the new instructions.
             """,
         )
 
-    @function_tool
-    async def calculate_bmi(
-        self,
-        weight_kg: Annotated[float, "The user's weight in kilograms"],
-        height_cm: Annotated[float, "The user's height in centimeters"],
-    ):
-        """Calculate Body Mass Index (BMI) from height and weight."""
-        height_m = height_cm / 100
-        bmi = weight_kg / (height_m ** 2)
-        bmi = round(bmi, 1)
-        
-        category = ""
-        if bmi < 18.5: category = "underweight"
-        elif bmi < 25: category = "healthy weight"
-        elif bmi < 30: category = "overweight"
-        else: category = "obese"
-
-        return f"The BMI is {bmi}, which is considered {category}."
+    # --- MODE SWITCHING TOOLS (UPDATED TO PREVENT LOOPS) ---
 
     @function_tool
-    async def log_daily_checkin(
-        self,
-        mood: Annotated[str, "Summary of the user's mood"],
-        energy: Annotated[str, "User's energy level"],
-        objectives: Annotated[str, "The user's main goals for the day"],
-    ):
-        """Save the daily check-in summary (mood, energy, objectives) to a JSON file."""
-        file_path = "wellness.json"
+    async def start_learning_mode(self, topic: Annotated[str, "The topic to learn (variables or loops)"]):
+        """Call this ONCE to switch to Professor Matthew."""
+        content = next((c for c in TUTOR_CONTENT if c["id"] in topic.lower()), TUTOR_CONTENT[0])
         
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        new_entry = {
-            "timestamp": timestamp,
-            "type": "daily_checkin",
-            "mood": mood,
-            "energy": energy,
-            "objectives": objectives
-        }
+        return f"""
+        COMMAND: STOP CALLING TOOLS.
+        ACTION: SWITCH PERSONA TO MATTHEW.
         
-        logger.info(f"Saving Check-in: {new_entry}")
+        NEW INSTRUCTION:
+        You are now Professor Matthew.
+        Say exactly: "Hello, I am Matthew. Let's discuss {content['title']}."
+        Then explain this summary: "{content['summary']}"
+        Finally ask: "Does that make sense, or should we move to the quiz?"
+        """
 
-        data = []
-        if os.path.exists(file_path):
-            try:
-                with open(file_path, "r") as f:
-                    data = json.load(f)
-            except Exception:
-                data = []
+    @function_tool
+    async def start_quiz_mode(self, topic: Annotated[str, "The topic to quiz (variables or loops)"]):
+        """Call this ONCE to switch to Alicia."""
+        content = next((c for c in TUTOR_CONTENT if c["id"] in topic.lower()), TUTOR_CONTENT[0])
 
-        data.append(new_entry)
-        with open(file_path, "w") as f:
-            json.dump(data, f, indent=2)
+        return f"""
+        COMMAND: STOP CALLING TOOLS.
+        ACTION: SWITCH PERSONA TO ALICIA.
+        
+        NEW INSTRUCTION:
+        You are now Alicia (Quiz Master).
+        Say exactly: "Hi! I'm Alicia! Time for a quiz on {content['title']}."
+        Ask this question: "{content['quiz_question']}"
+        Wait for the user's answer.
+        """
 
-        return "Check-in saved successfully! Wishing you a great day ahead."
+    @function_tool
+    async def start_teach_back_mode(self, topic: Annotated[str, "The topic to teach back"]):
+        """Call this ONCE to switch to Ken."""
+        content = next((c for c in TUTOR_CONTENT if c["id"] in topic.lower()), TUTOR_CONTENT[0])
 
+        return f"""
+        COMMAND: STOP CALLING TOOLS.
+        ACTION: SWITCH PERSONA TO KEN.
+        
+        NEW INSTRUCTION:
+        You are now Ken (Student).
+        Say exactly: "Hey, I'm Ken. I'm confused about {content['title']}."
+        Use this prompt: "{content['teach_back_prompt']}"
+        """
+# --- SETUP PIPELINE ---
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
-
 async def entrypoint(ctx: JobContext):
-    # Logging setup
-    # Add any other context you want in all log entries here
-    ctx.log_context_fields = {
-        "room": ctx.room.name,
-    }
+    ctx.log_context_fields = {"room": ctx.room.name}
 
-    # Set up a voice AI pipeline using OpenAI, Cartesia, AssemblyAI, and the LiveKit turn detector
     session = AgentSession(
-        # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
-        # See all available models at https://docs.livekit.io/agents/models/stt/
-        stt=deepgram.STT(model="nova-3"),
-        # A Large Language Model (LLM) is your agent's brain, processing user input and generating a response
-        # See all available models at https://docs.livekit.io/agents/models/llm/
-        llm=google.LLM(
-                model="gemini-2.5-flash",
-            ),
-        # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-        # See all available models as well as voice selections at https://docs.livekit.io/agents/models/tts/
-        tts=murf.TTS(
-                voice="en-US-matthew", 
-                style="Conversation",
-                tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
-                text_pacing=True
-            ),
-        # VAD and turn detection are used to determine when the user is speaking and when the agent should respond
-        # See more at https://docs.livekit.io/agents/build/turns
-        turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
-        # allow the LLM to generate a response while waiting for the end of turn
-        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
-        preemptive_generation=True,
+        stt=deepgram.STT(model="nova-3"),
+        # We still use google.LLM for the brain, but we removed 'llm' from imports that caused issues
+        llm=google.LLM(model="gemini-2.5-flash"),
+        tts=murf.TTS(
+            voice="en-US-matthew", 
+            style="Conversation",
+            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+            text_pacing=True
+        ),
+        turn_detection=MultilingualModel(),
     )
 
-    # Metrics collection, to measure pipeline performance
-    # For more information, see https://docs.livekit.io/agents/build/metrics/
-    usage_collector = metrics.UsageCollector()
-
-    @session.on("metrics_collected")
-    def _on_metrics_collected(ev: MetricsCollectedEvent):
-        metrics.log_metrics(ev.metrics)
-        usage_collector.collect(ev.metrics)
-
-    async def log_usage():
-        summary = usage_collector.get_summary()
-        logger.info(f"Usage: {summary}")
-
-    ctx.add_shutdown_callback(log_usage)
-
-    # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
-        agent=Assistant(),
+        agent=TutorAgent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
-            # For telephony applications, use `BVCTelephony` for best results
             noise_cancellation=noise_cancellation.BVC(),
         ),
     )
 
-    # Join the room and connect to the user
     await ctx.connect()
-
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
