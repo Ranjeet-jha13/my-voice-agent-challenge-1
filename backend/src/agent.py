@@ -1,5 +1,7 @@
 import logging
 import json
+import os
+from datetime import datetime
 from typing import Annotated
 from dotenv import load_dotenv
 
@@ -10,90 +12,72 @@ from livekit.agents import (
     JobProcess,
     WorkerOptions,
     cli,
-    metrics,
+    function_tool,
+    llm, # Ensure this is imported for type hints if needed, but we avoid direct usage in events
     tokenize,
-    function_tool, 
-    RoomInputOptions,# <--- WE ARE USING THIS NOW
+    RoomInputOptions,
 )
 from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from company_data import COMPANY_NAME, FAQ_DATA
 
 load_dotenv(".env.local")
 logger = logging.getLogger("agent")
 
-# --- 1. LOAD CONTENT ---
-try:
-    with open("tutor_content.json", "r") as f:
-        TUTOR_CONTENT = json.load(f)
-except FileNotFoundError:
-    # Fallback content if file is missing
-    TUTOR_CONTENT = [
-        {"id": "variables", "title": "Variables", "summary": "Variables are like boxes for data.", "quiz_question": "What is a variable?", "teach_back_prompt": "Explain variables like I am 5."},
-        {"id": "loops", "title": "Loops", "summary": "Loops repeat actions.", "quiz_question": "What does a loop do?", "teach_back_prompt": "How would you use a loop to clap hands?"}
-    ]
-
-class TutorAgent(Agent):
+class SDRAgent(Agent):
     def __init__(self):
         super().__init__(
-            instructions="""You are the Receptionist at 'Neural Academy'.
+            instructions=f"""You are Samson, an SDR for {COMPANY_NAME}.
             
-            YOUR FLOW:
-            1. Greet the user and ask for a mode (Learn, Quiz, Teach-Back).
-            2. When the user picks a mode, call the tool ONE TIME.
-            3. IMPORTANT: After the tool returns the "SYSTEM UPDATE", do NOT call the tool again. 
-               Instead, immediately ADOPT the new persona and SPEAK to the user based on the new instructions.
+            YOUR GOAL:
+            Qualify the user as a potential restaurant partner.
+            
+            KNOWLEDGE BASE:
+            {FAQ_DATA}
+            
+            CONVERSATION FLOW:
+            1. Greet them warmly and ask what brought them here.
+            2. Answer their questions using the FAQ. Do not make up facts.
+            3. SMOOTHLY ask for their details: Name, Restaurant Name, Email, and Timeline.
+            4. Use the 'save_lead_details' tool as soon as you get this info.
+            5. Once you have the info and answered questions, politely end the call.
+            
+            TONE: Professional, helpful, and concise.
             """,
         )
-
-    # --- MODE SWITCHING TOOLS (UPDATED TO PREVENT LOOPS) ---
-
-    @function_tool
-    async def start_learning_mode(self, topic: Annotated[str, "The topic to learn (variables or loops)"]):
-        """Call this ONCE to switch to Professor Matthew."""
-        content = next((c for c in TUTOR_CONTENT if c["id"] in topic.lower()), TUTOR_CONTENT[0])
-        
-        return f"""
-        COMMAND: STOP CALLING TOOLS.
-        ACTION: SWITCH PERSONA TO MATTHEW.
-        
-        NEW INSTRUCTION:
-        You are now Professor Matthew.
-        Say exactly: "Hello, I am Matthew. Let's discuss {content['title']}."
-        Then explain this summary: "{content['summary']}"
-        Finally ask: "Does that make sense, or should we move to the quiz?"
-        """
+        # Initialize the transcript list
+        self.transcript = []
 
     @function_tool
-    async def start_quiz_mode(self, topic: Annotated[str, "The topic to quiz (variables or loops)"]):
-        """Call this ONCE to switch to Alicia."""
-        content = next((c for c in TUTOR_CONTENT if c["id"] in topic.lower()), TUTOR_CONTENT[0])
-
-        return f"""
-        COMMAND: STOP CALLING TOOLS.
-        ACTION: SWITCH PERSONA TO ALICIA.
+    async def save_lead_details(
+        self, 
+        name: Annotated[str, "Customer Name"],
+        restaurant_name: Annotated[str, "Restaurant or Company Name"],
+        email: Annotated[str, "Email Address"],
+        timeline: Annotated[str, "When they want to start (Now/Soon/Later)"]
+    ):
+        """Saves the lead's core contact details to a JSON file."""
+        entry = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "name": name,
+            "restaurant": restaurant_name,
+            "email": email,
+            "timeline": timeline
+        }
         
-        NEW INSTRUCTION:
-        You are now Alicia (Quiz Master).
-        Say exactly: "Hi! I'm Alicia! Time for a quiz on {content['title']}."
-        Ask this question: "{content['quiz_question']}"
-        Wait for the user's answer.
-        """
-
-    @function_tool
-    async def start_teach_back_mode(self, topic: Annotated[str, "The topic to teach back"]):
-        """Call this ONCE to switch to Ken."""
-        content = next((c for c in TUTOR_CONTENT if c["id"] in topic.lower()), TUTOR_CONTENT[0])
-
-        return f"""
-        COMMAND: STOP CALLING TOOLS.
-        ACTION: SWITCH PERSONA TO KEN.
-        
-        NEW INSTRUCTION:
-        You are now Ken (Student).
-        Say exactly: "Hey, I'm Ken. I'm confused about {content['title']}."
-        Use this prompt: "{content['teach_back_prompt']}"
-        """
-# --- SETUP PIPELINE ---
+        file_path = "leads.json"
+        data = []
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r") as f:
+                    data = json.load(f)
+            except: pass
+            
+        data.append(entry)
+        with open(file_path, "w") as f:
+            json.dump(data, f, indent=2)
+            
+        return "Details saved. Thank you!"
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
@@ -101,22 +85,77 @@ def prewarm(proc: JobProcess):
 async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
 
+    sdr_agent = SDRAgent()
+
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(model="nova-3"),
-        # We still use google.LLM for the brain, but we removed 'llm' from imports that caused issues
         llm=google.LLM(model="gemini-2.5-flash"),
         tts=murf.TTS(
-            voice="en-US-matthew", 
-            style="Conversation",
+            voice="en-US-matthew",
+            style="Professional",
             tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
             text_pacing=True
         ),
         turn_detection=MultilingualModel(),
     )
 
+    # --- THE FIX: USE 'conversation_item_added' ---
+    # This event comes from the documentation you shared. 
+    # It fires whenever a text message is added to the chat history.
+    
+    @session.on("conversation_item_added")
+    def on_item_added(event_or_msg):
+        # Depending on version, this might be an Event object OR the Message directly.
+        # We handle both cases safely.
+        
+        # 1. Unwrap the message item
+        item = event_or_msg
+        if hasattr(event_or_msg, "item"):
+            item = event_or_msg.item
+        
+        # 2. Extract content
+        role = getattr(item, "role", "unknown")
+        content = getattr(item, "content", "")
+        
+        # 3. Convert list content to string (common in some LLM outputs)
+        if isinstance(content, list):
+            content = " ".join([str(x) for x in content])
+            
+        # 4. Log it
+        if content and isinstance(content, str):
+            log_line = f"{role.capitalize()}: {content}"
+            sdr_agent.transcript.append(log_line)
+            logger.info(f"📝 Transcript: {log_line}")
+
+    # --- ON DISCONNECT: SAVE CRM NOTES ---
+    @ctx.room.on("disconnected")
+  # --- ON DISCONNECT: SAVE CRM NOTES ---
+    @ctx.room.on("disconnected")
+    def on_room_disconnect(reason):
+        logger.info("Call ended. Processing CRM notes...")
+        
+        # FIX: Save as a List, not a joined String
+        transcript_data = sdr_agent.transcript 
+        
+        if not transcript_data:
+            transcript_data = ["(No conversation items were captured)"]
+
+        crm_entry = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "call_summary": {
+                "status": "Completed",
+                "transcript": transcript_data  # <--- Now it saves the list directly!
+            }
+        }
+        
+        with open("crm_notes.json", "a") as f:
+            f.write(json.dumps(crm_entry, indent=2) + ",\n")
+            
+        logger.info("✅ CRM Notes saved to crm_notes.json")
+
     await session.start(
-        agent=TutorAgent(),
+        agent=sdr_agent,
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(),
