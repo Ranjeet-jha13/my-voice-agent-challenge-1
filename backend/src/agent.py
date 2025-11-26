@@ -1,7 +1,6 @@
 import logging
+import sqlite3
 import json
-import os
-from datetime import datetime
 from typing import Annotated
 from dotenv import load_dotenv
 
@@ -13,71 +12,100 @@ from livekit.agents import (
     WorkerOptions,
     cli,
     function_tool,
-    llm, # Ensure this is imported for type hints if needed, but we avoid direct usage in events
     tokenize,
     RoomInputOptions,
 )
 from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-from company_data import COMPANY_NAME, FAQ_DATA
 
 load_dotenv(".env.local")
 logger = logging.getLogger("agent")
 
-class SDRAgent(Agent):
+class FraudAgent(Agent):
     def __init__(self):
         super().__init__(
-            instructions=f"""You are Samson, an SDR for {COMPANY_NAME}.
+            instructions="""You are 'Eren', a Fraud Prevention Specialist from 'Murf Bank'.
             
-            YOUR GOAL:
-            Qualify the user as a potential restaurant partner.
+            YOUR FLOW:
+            1. Greet the user and ask for their Name.
+            2. Use `get_transaction` to find their case.
+            3. Verify identity by asking for the Security PIN.
+            4. Read transaction details. Ask: "Did you authorize this?"
             
-            KNOWLEDGE BASE:
-            {FAQ_DATA}
-            
-            CONVERSATION FLOW:
-            1. Greet them warmly and ask what brought them here.
-            2. Answer their questions using the FAQ. Do not make up facts.
-            3. SMOOTHLY ask for their details: Name, Restaurant Name, Email, and Timeline.
-            4. Use the 'save_lead_details' tool as soon as you get this info.
-            5. Once you have the info and answered questions, politely end the call.
-            
-            TONE: Professional, helpful, and concise.
+            CRITICAL RULES:
+            - If user says NO (Unauthorized):
+              You MUST call the `update_status` tool with status='fraudulent'.
+              ONLY AFTER the tool confirms success, tell the user their card is blocked.
+              
+            - If user says YES (Authorized):
+              You MUST call the `update_status` tool with status='safe'.
+              ONLY AFTER the tool confirms success, thank them and end call.
             """,
         )
-        # Initialize the transcript list
-        self.transcript = []
+        # Create DB in RAM
+        self.conn = sqlite3.connect(":memory:")
+        self.cursor = self.conn.cursor()
+        self._setup_mock_data()
 
+    def _setup_mock_data(self):
+        """Creates mock data and prints the INITIAL state."""
+        self.cursor.execute("""
+            CREATE TABLE transactions (
+                username TEXT PRIMARY KEY, security_pin TEXT, card_last4 TEXT,
+                merchant TEXT, amount TEXT, location TEXT, timestamp TEXT, status TEXT
+            )
+        """)
+        self.cursor.execute("""
+            INSERT INTO transactions VALUES (
+                'John', '1234', '4242', 'Apple Store', '$999.00', 
+                'New York, NY', '2025-11-26 14:30:00', 'pending_review'
+            )
+        """)
+        self.conn.commit()
+        logger.info("------------------------------------------------")
+        logger.info("✅ DB INITIALIZED. Mock User: 'John'")
+        logger.info("📊 INITIAL STATUS: 'pending_review'")
+        logger.info("------------------------------------------------")
+
+    # --- TOOL 1: READ DATABASE ---
     @function_tool
-    async def save_lead_details(
+    async def get_transaction(self, username: Annotated[str, "The customer's name"]):
+        try:
+            self.cursor.execute("SELECT * FROM transactions WHERE username LIKE ?", (username,))
+            row = self.cursor.fetchone()
+            if row:
+                return f"""
+                FOUND RECORD: User: {row[0]}, PIN: {row[1]}, Merchant: {row[3]}, Amount: {row[4]}, Status: {row[7]}
+                """
+            else:
+                return "No transaction found."
+        except Exception as e:
+            return f"Database Error: {e}"
+
+    # --- TOOL 2: WRITE TO DATABASE ---
+    @function_tool
+    async def update_status(
         self, 
-        name: Annotated[str, "Customer Name"],
-        restaurant_name: Annotated[str, "Restaurant or Company Name"],
-        email: Annotated[str, "Email Address"],
-        timeline: Annotated[str, "When they want to start (Now/Soon/Later)"]
+        username: Annotated[str, "Customer Name"], 
+        status: Annotated[str, "New status: 'safe' or 'fraudulent'"]
     ):
-        """Saves the lead's core contact details to a JSON file."""
-        entry = {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "name": name,
-            "restaurant": restaurant_name,
-            "email": email,
-            "timeline": timeline
-        }
-        
-        file_path = "leads.json"
-        data = []
-        if os.path.exists(file_path):
-            try:
-                with open(file_path, "r") as f:
-                    data = json.load(f)
-            except: pass
+        try:
+            logger.info(f"⚡ UPDATING DATABASE: Setting {username} to '{status}'...")
+            self.cursor.execute("UPDATE transactions SET status = ? WHERE username LIKE ?", (status, username))
+            self.conn.commit()
             
-        data.append(entry)
-        with open(file_path, "w") as f:
-            json.dump(data, f, indent=2)
+            # Verify immediate write
+            self.cursor.execute("SELECT status FROM transactions WHERE username LIKE ?", (username,))
+            new_status = self.cursor.fetchone()[0]
             
-        return "Details saved. Thank you!"
+            logger.info("------------------------------------------------")
+            logger.info(f"✅ WRITE SUCCESSFUL.")
+            logger.info(f"📊 NEW DATABASE STATUS: '{new_status}'")
+            logger.info("------------------------------------------------")
+            
+            return f"SUCCESS: Transaction for {username} marked as {new_status}."
+        except Exception as e:
+            return f"Error updating database: {e}"
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
@@ -85,14 +113,12 @@ def prewarm(proc: JobProcess):
 async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
 
-    sdr_agent = SDRAgent()
-
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(model="nova-3"),
         llm=google.LLM(model="gemini-2.5-flash"),
         tts=murf.TTS(
-            voice="en-US-matthew",
+            voice="en-US-terrell",
             style="Professional",
             tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
             text_pacing=True
@@ -100,62 +126,8 @@ async def entrypoint(ctx: JobContext):
         turn_detection=MultilingualModel(),
     )
 
-    # --- THE FIX: USE 'conversation_item_added' ---
-    # This event comes from the documentation you shared. 
-    # It fires whenever a text message is added to the chat history.
-    
-    @session.on("conversation_item_added")
-    def on_item_added(event_or_msg):
-        # Depending on version, this might be an Event object OR the Message directly.
-        # We handle both cases safely.
-        
-        # 1. Unwrap the message item
-        item = event_or_msg
-        if hasattr(event_or_msg, "item"):
-            item = event_or_msg.item
-        
-        # 2. Extract content
-        role = getattr(item, "role", "unknown")
-        content = getattr(item, "content", "")
-        
-        # 3. Convert list content to string (common in some LLM outputs)
-        if isinstance(content, list):
-            content = " ".join([str(x) for x in content])
-            
-        # 4. Log it
-        if content and isinstance(content, str):
-            log_line = f"{role.capitalize()}: {content}"
-            sdr_agent.transcript.append(log_line)
-            logger.info(f"📝 Transcript: {log_line}")
-
-    # --- ON DISCONNECT: SAVE CRM NOTES ---
-    @ctx.room.on("disconnected")
-  # --- ON DISCONNECT: SAVE CRM NOTES ---
-    @ctx.room.on("disconnected")
-    def on_room_disconnect(reason):
-        logger.info("Call ended. Processing CRM notes...")
-        
-        # FIX: Save as a List, not a joined String
-        transcript_data = sdr_agent.transcript 
-        
-        if not transcript_data:
-            transcript_data = ["(No conversation items were captured)"]
-
-        crm_entry = {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "call_summary": {
-                "status": "Completed",
-                "transcript": transcript_data  # <--- Now it saves the list directly!
-            }
-        }
-        
-        with open("crm_notes.json", "a") as f:
-            f.write(json.dumps(crm_entry, indent=2) + ",\n")
-            
-        logger.info("✅ CRM Notes saved to crm_notes.json")
-
     await session.start(
-        agent=sdr_agent,
+        agent=FraudAgent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(),
