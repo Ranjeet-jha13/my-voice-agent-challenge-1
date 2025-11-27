@@ -1,0 +1,89 @@
+[
+  {
+    "order_id": "ORD-1764264925",
+    "timestamp": "2025-11-27T23:05:25.818471",
+    "customer": "Rahul",
+    "items": [
+      {
+        "name": "Milk (1 Gallon)",
+        "price": 3.5,
+        "qty": 1
+      },
+      {
+        "name": "Peanut Butter",
+        "price": 4.0,
+        "qty": 1
+      },
+      {
+        "name": "Grape Jelly",
+        "price": 3.5,
+        "qty": 1
+      },
+      {
+        "name": "Whole Wheat Bread",
+        "price": 4.5,
+        "qty": 1
+      }
+    ],
+    "total": 15.5,
+    "status": "Delivered \ud83c\udfe0"
+  },
+  {
+    "order_id": "ORD-1764268157",
+    "timestamp": "2025-11-27T23:59:17.029135",
+    "customer": "Rahul",
+    "items": [
+      {
+        "name": "Milk (1 Gallon)",
+        "price": 3.5,
+        "qty": 1
+      },
+      {
+        "name": "Whole Wheat Bread",
+        "price": 4.5,
+        "qty": 1
+      },
+      {
+        "name": "Peanut Butter",
+        "price": 4.0,
+        "qty": 1
+      },
+      {
+        "name": "Grape Jelly",
+        "price": 3.5,
+        "qty": 1
+      }
+    ],
+    "total": 15.5,
+    "status": "Delivered \ud83c\udfe0"
+  },
+  {
+    "order_id": "ORD-1764268755",
+    "timestamp": "2025-11-28T00:09:15.559217",
+    "customer": "Samsung",
+    "items": [
+      {
+        "name": "Milk (1 Gallon)",
+        "price": 3.5,
+        "qty": 1
+      },
+      {
+        "name": "Peanut Butter",
+        "price": 4.0,
+        "qty": 1
+      },
+      {
+        "name": "Grape Jelly",
+        "price": 3.5,
+        "qty": 1
+      },
+      {
+        "name": "Whole Wheat Bread",
+        "price": 4.5,
+        "qty": 1
+      }
+    ],
+    "total": 15.5,
+    "status": "Delivered \ud83c\udfe0"
+  }
+]

@@ -1,6 +1,7 @@
 import logging
-import sqlite3
 import json
+import os
+from datetime import datetime, timedelta
 from typing import Annotated
 from dotenv import load_dotenv
 
@@ -21,119 +22,160 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 load_dotenv(".env.local")
 logger = logging.getLogger("agent")
 
-class FraudAgent(Agent):
+# --- 1. LOAD CATALOG ---
+try:
+    with open("catalog.json", "r") as f:
+        CATALOG = json.load(f)
+except FileNotFoundError:
+    CATALOG = []
+    logger.error("CATALOG.JSON NOT FOUND!")
+
+class GrocerAgent(Agent):
     def __init__(self):
         super().__init__(
-            instructions="""You are 'Eren', a Fraud Prevention Specialist from 'Murf Bank'.
+            instructions="""You are 'FreshBot', an intelligent grocery ordering assistant.
             
-            YOUR FLOW:
-            1. Greet the user and ask for their Name.
-            2. Use `get_transaction` to find their case.
-            3. Verify identity by asking for the Security PIN.
-            4. Read transaction details. Ask: "Did you authorize this?"
+            YOUR GOAL:
+            1. Help users order food (add/remove items).
+            2. Track existing orders using the `track_order` tool.
             
-            CRITICAL RULES:
-            - If user says NO (Unauthorized):
-              You MUST call the `update_status` tool with status='fraudulent'.
-              ONLY AFTER the tool confirms success, tell the user their card is blocked.
-              
-            - If user says YES (Authorized):
-              You MUST call the `update_status` tool with status='safe'.
-              ONLY AFTER the tool confirms success, thank them and end call.
+            CATALOG RULES:
+            - If a user asks for "ingredients for a sandwich", add Bread, Peanut Butter, and Jelly automatically.
+            - If a user asks for "ingredients for pasta", add Pasta and Sauce.
+            
+            TOOLS:
+            - `add_to_cart`: For adding items.
+            - `get_cart_status`: To see what is currently selected.
+            - `place_order`: ONLY when they say "checkout" or "I'm done".
+            - `track_order`: If they ask "Where is my order?" or "Status update".
+            
+            TONE: Helpful, efficient, and polite.
             """,
         )
-        # Create DB in RAM
-        self.conn = sqlite3.connect(":memory:")
-        self.cursor = self.conn.cursor()
-        self._setup_mock_data()
+        self.cart = [] 
 
-    def _setup_mock_data(self):
-        """Creates mock data and prints the INITIAL state."""
-        self.cursor.execute("""
-            CREATE TABLE transactions (
-                username TEXT PRIMARY KEY, security_pin TEXT, card_last4 TEXT,
-                merchant TEXT, amount TEXT, location TEXT, timestamp TEXT, status TEXT
-            )
-        """)
-        self.cursor.execute("""
-            INSERT INTO transactions VALUES (
-                'John', '1234', '4242', 'Apple Store', '$999.00', 
-                'New York, NY', '2025-11-26 14:30:00', 'pending_review'
-            )
-        """)
-        self.conn.commit()
-        logger.info("------------------------------------------------")
-        logger.info("✅ DB INITIALIZED. Mock User: 'John'")
-        logger.info("📊 INITIAL STATUS: 'pending_review'")
-        logger.info("------------------------------------------------")
+    def _find_item(self, query):
+        query = query.lower()
+        return [i for i in CATALOG if query in i['name'].lower() or query in i['tags']]
 
-    # --- TOOL 1: READ DATABASE ---
+    # --- TOOL 1: ADD TO CART (With Recipe Logic) ---
     @function_tool
-    async def get_transaction(self, username: Annotated[str, "The customer's name"]):
-        try:
-            self.cursor.execute("SELECT * FROM transactions WHERE username LIKE ?", (username,))
-            row = self.cursor.fetchone()
-            if row:
-                return f"""
-                FOUND RECORD: User: {row[0]}, PIN: {row[1]}, Merchant: {row[3]}, Amount: {row[4]}, Status: {row[7]}
-                """
-            else:
-                return "No transaction found."
-        except Exception as e:
-            return f"Database Error: {e}"
-
-    # --- TOOL 2: WRITE TO DATABASE ---
-    @function_tool
-    async def update_status(
+    async def add_to_cart(
         self, 
-        username: Annotated[str, "Customer Name"], 
-        status: Annotated[str, "New status: 'safe' or 'fraudulent'"]
+        item_name: Annotated[str, "Item name or recipe"], 
+        quantity: Annotated[int, "Quantity"] = 1
     ):
-        try:
-            logger.info(f"⚡ UPDATING DATABASE: Setting {username} to '{status}'...")
-            self.cursor.execute("UPDATE transactions SET status = ? WHERE username LIKE ?", (status, username))
-            self.conn.commit()
-            
-            # Verify immediate write
-            self.cursor.execute("SELECT status FROM transactions WHERE username LIKE ?", (username,))
-            new_status = self.cursor.fetchone()[0]
-            
-            logger.info("------------------------------------------------")
-            logger.info(f"✅ WRITE SUCCESSFUL.")
-            logger.info(f"📊 NEW DATABASE STATUS: '{new_status}'")
-            logger.info("------------------------------------------------")
-            
-            return f"SUCCESS: Transaction for {username} marked as {new_status}."
-        except Exception as e:
-            return f"Error updating database: {e}"
+        """Adds items to cart. Handles 'ingredients for X' requests."""
+        # Recipe Logic
+        if "sandwich" in item_name.lower():
+            self.cart.append({"name": "Whole Wheat Bread", "price": 4.50, "qty": 1})
+            self.cart.append({"name": "Peanut Butter", "price": 4.00, "qty": 1})
+            self.cart.append({"name": "Grape Jelly", "price": 3.50, "qty": 1})
+            return "Smart choice! Added Bread, PB, and Jelly for your sandwich."
+        
+        if "pasta" in item_name.lower():
+            self.cart.append({"name": "Spaghetti Pasta", "price": 2.00, "qty": 1})
+            self.cart.append({"name": "Marinara Sauce", "price": 4.00, "qty": 1})
+            return "Yum! Added Spaghetti and Sauce for pasta night."
 
+        # Standard Logic
+        matches = self._find_item(item_name)
+        if not matches: return f"Sorry, I don't have '{item_name}'."
+        if len(matches) > 1: return f"Did you mean: {', '.join([m['name'] for m in matches])}?"
+
+        target = matches[0]
+        self.cart.append({"name": target['name'], "price": target['price'], "qty": quantity})
+        return f"Added {quantity} {target['name']} to cart."
+
+    # --- TOOL 2: VIEW CART ---
+    @function_tool
+    async def get_cart_status(self):
+        """Shows current cart items."""
+        if not self.cart: return "Your cart is empty."
+        items_list = "\n".join([f"- {i['qty']}x {i['name']}" for i in self.cart])
+        total = sum(i['price'] * i['qty'] for i in self.cart)
+        return f"Cart:\n{items_list}\nTotal: ${total:.2f}"
+
+    # --- TOOL 3: PLACE ORDER (SAVES TO JSON) ---
+    @function_tool
+    async def place_order(self, customer_name: Annotated[str, "Name"]):
+        """Places the order and saves to JSON."""
+        if not self.cart: return "Cart is empty!"
+        
+        total = sum(i['price'] * i['qty'] for i in self.cart)
+        # Create Order Data with Timestamp
+        order_data = {
+            "order_id": f"ORD-{int(datetime.now().timestamp())}",
+            "timestamp": datetime.now().isoformat(), # Save time for tracking logic
+            "customer": customer_name,
+            "items": self.cart,
+            "total": total,
+            "status": "Received" 
+        }
+
+        # Append to orders.json
+        file_path = "orders.json"
+        history = []
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, "r") as f: history = json.load(f)
+            except: pass
+        
+        history.append(order_data)
+        with open(file_path, "w") as f: json.dump(history, f, indent=2)
+        
+        self.cart = [] # Clear cart
+        return f"Order placed! ID: {order_data['order_id']}. You can ask me to track it."
+
+    # --- TOOL 4: ADVANCED TRACKING (MOCK TIME LOGIC) ---
+    @function_tool
+    async def track_order(self):
+        """Checks the status of the most recent order based on time passed."""
+        file_path = "orders.json"
+        if not os.path.exists(file_path): return "No orders found."
+        
+        try:
+            with open(file_path, "r") as f: history = json.load(f)
+            if not history: return "No orders found."
+            
+            # Get latest order
+            latest_order = history[-1]
+            order_time = datetime.fromisoformat(latest_order["timestamp"])
+            time_diff = datetime.now() - order_time
+            
+            # Mock Logic: Update status based on how much time passed
+            new_status = latest_order["status"]
+            if time_diff > timedelta(seconds=120): # 2 mins later
+                new_status = "Delivered 🏠"
+            elif time_diff > timedelta(seconds=60): # 1 min later
+                new_status = "Out for Delivery 🛵"
+            elif time_diff > timedelta(seconds=30): # 30 secs later
+                new_status = "Being Prepared 🍳"
+            
+            # Save update if changed
+            if new_status != latest_order["status"]:
+                latest_order["status"] = new_status
+                with open(file_path, "w") as f: json.dump(history, f, indent=2)
+            
+            return f"Order Status for {latest_order['customer']}: {new_status}"
+            
+        except Exception as e:
+            return f"Error tracking order: {e}"
+
+# --- SETUP ---
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
 async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
-
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(model="nova-3"),
         llm=google.LLM(model="gemini-2.5-flash"),
-        tts=murf.TTS(
-            voice="en-US-terrell",
-            style="Professional",
-            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
-            text_pacing=True
-        ),
+        tts=murf.TTS(voice="en-US-matthew", style="Conversation", tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2), text_pacing=True),
         turn_detection=MultilingualModel(),
     )
-
-    await session.start(
-        agent=FraudAgent(),
-        room=ctx.room,
-        room_input_options=RoomInputOptions(
-            noise_cancellation=noise_cancellation.BVC(),
-        ),
-    )
-
+    await session.start(agent=GrocerAgent(), room=ctx.room, room_input_options=RoomInputOptions(noise_cancellation=noise_cancellation.BVC()))
     await ctx.connect()
 
 if __name__ == "__main__":

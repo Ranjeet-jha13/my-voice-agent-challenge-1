@@ -1,0 +1,13 @@
+[
+  { "id": "bread_whole", "name": "Whole Wheat Bread", "price": 4.50, "category": "bakery", "tags": ["sandwich", "toast"] },
+  { "id": "bread_white", "name": "White Bread", "price": 3.00, "category": "bakery", "tags": ["sandwich", "toast"] },
+  { "id": "milk", "name": "Milk (1 Gallon)", "price": 3.50, "category": "dairy", "tags": ["cereal", "coffee"] },
+  { "id": "eggs", "name": "Eggs (Dozen)", "price": 5.00, "category": "dairy", "tags": ["breakfast", "baking"] },
+  { "id": "pb", "name": "Peanut Butter", "price": 4.00, "category": "pantry", "tags": ["sandwich", "snack"] },
+  { "id": "jelly", "name": "Grape Jelly", "price": 3.50, "category": "pantry", "tags": ["sandwich"] },
+  { "id": "pasta", "name": "Spaghetti Pasta", "price": 2.00, "category": "pantry", "tags": ["dinner", "pasta"] },
+  { "id": "sauce", "name": "Marinara Sauce", "price": 4.00, "category": "pantry", "tags": ["dinner", "pasta"] },
+  { "id": "cheese", "name": "Mozzarella Cheese", "price": 6.00, "category": "dairy", "tags": ["pizza", "pasta"] },
+  { "id": "apple", "name": "Red Apple", "price": 1.00, "category": "produce", "tags": ["fruit", "snack"] },
+  { "id": "banana", "name": "Banana", "price": 0.80, "category": "produce", "tags": ["fruit", "snack"] }
+]
