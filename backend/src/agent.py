@@ -1,7 +1,6 @@
 import logging
 import json
 import os
-from datetime import datetime, timedelta
 from typing import Annotated
 from dotenv import load_dotenv
 
@@ -22,160 +21,153 @@ from livekit.plugins.turn_detector.multilingual import MultilingualModel
 load_dotenv(".env.local")
 logger = logging.getLogger("agent")
 
-# --- 1. LOAD CATALOG ---
-try:
-    with open("catalog.json", "r") as f:
-        CATALOG = json.load(f)
-except FileNotFoundError:
-    CATALOG = []
-    logger.error("CATALOG.JSON NOT FOUND!")
-
-class GrocerAgent(Agent):
+# --- GAME STATE CLASS ---
+class GameState:
     def __init__(self):
+        self.hp = 100
+        self.inventory = ["Signal Flare", "Rusty Blade"]
+        self.location = "Outer Wall"
+        self.quest = "Survive"
+
+    def to_json(self):
+        return json.dumps({
+            "hp": self.hp,
+            "inventory": self.inventory,
+            "location": self.location,
+            "quest": self.quest
+        }, indent=2)
+
+class GameMaster(Agent):
+    def __init__(self):
+        self.game = GameState()
+        
+        # Save initial state immediately when game starts
+        self._save_game_state()
+        
         super().__init__(
-            instructions="""You are 'FreshBot', an intelligent grocery ordering assistant.
+            instructions=f"""You are a Scripted Game Master for an Attack on Titan demo.
             
-            YOUR GOAL:
-            1. Help users order food (add/remove items).
-            2. Track existing orders using the `track_order` tool.
+            Your job is to follow this EXACT script sequence. Do not deviate.
             
-            CATALOG RULES:
-            - If a user asks for "ingredients for a sandwich", add Bread, Peanut Butter, and Jelly automatically.
-            - If a user asks for "ingredients for pasta", add Pasta and Sauce.
+            SCENE 1 (Start):
+            - Describe the windy Outer Wall.
+            - Ask: "What do you do?"
             
-            TOOLS:
-            - `add_to_cart`: For adding items.
-            - `get_cart_status`: To see what is currently selected.
-            - `place_order`: ONLY when they say "checkout" or "I'm done".
-            - `track_order`: If they ask "Where is my order?" or "Status update".
+            SCENE 2 (Trigger: User says "Scan" or "Look"):
+            - Say: "You spot a 15-meter Titan gripping the wall! It sees you."
+            - Ask: "What do you do?"
             
-            TONE: Helpful, efficient, and polite.
+            SCENE 3 (Trigger: User says "Flare" or "Signal"):
+            - CALL TOOL: `update_game_state` with ALL FOUR parameters: damage_taken=0, new_location="", item_found="", item_used="Signal Flare".
+            - Say: "The red flare shoots up! But the Titan swipes at you!"
+            - Ask: "What do you do?"
+            
+            SCENE 4 (Trigger: User says "Attack" or "Blade"):
+            - CALL TOOL: `update_game_state` with ALL FOUR parameters: damage_taken=20, new_location="", item_found="", item_used="Rusty Blade".
+            - Say: "You slash its hand, but the steam burns you! You take 20 damage."
+            - Ask: "What do you do?"
+            
+            SCENE 5 (Trigger: User says "Retreat" or "Inner Keep"):
+            - CALL TOOL: `update_game_state` with ALL FOUR parameters: damage_taken=0, new_location="Inner Keep", item_found="", item_used="".
+            - Say: "You grapple away to the Inner Keep. You are safe. Mission Complete."
+            - STOP TALKING.
+            
+            IMPORTANT: When calling update_game_state, ALWAYS provide all four parameters. Use empty strings ("") or 0 for unused parameters.
+            
+            Current State: {self.game.to_json()}
             """,
         )
-        self.cart = [] 
 
-    def _find_item(self, query):
-        query = query.lower()
-        return [i for i in CATALOG if query in i['name'].lower() or query in i['tags']]
-
-    # --- TOOL 1: ADD TO CART (With Recipe Logic) ---
-    @function_tool
-    async def add_to_cart(
-        self, 
-        item_name: Annotated[str, "Item name or recipe"], 
-        quantity: Annotated[int, "Quantity"] = 1
-    ):
-        """Adds items to cart. Handles 'ingredients for X' requests."""
-        # Recipe Logic
-        if "sandwich" in item_name.lower():
-            self.cart.append({"name": "Whole Wheat Bread", "price": 4.50, "qty": 1})
-            self.cart.append({"name": "Peanut Butter", "price": 4.00, "qty": 1})
-            self.cart.append({"name": "Grape Jelly", "price": 3.50, "qty": 1})
-            return "Smart choice! Added Bread, PB, and Jelly for your sandwich."
+    def _save_game_state(self):
+        """Helper method to save game state to JSON file"""
+        current_dir = os.path.dirname(os.path.abspath(__file__))  # src
+        parent_dir = os.path.dirname(current_dir)  # backend
         
-        if "pasta" in item_name.lower():
-            self.cart.append({"name": "Spaghetti Pasta", "price": 2.00, "qty": 1})
-            self.cart.append({"name": "Marinara Sauce", "price": 4.00, "qty": 1})
-            return "Yum! Added Spaghetti and Sauce for pasta night."
-
-        # Standard Logic
-        matches = self._find_item(item_name)
-        if not matches: return f"Sorry, I don't have '{item_name}'."
-        if len(matches) > 1: return f"Did you mean: {', '.join([m['name'] for m in matches])}?"
-
-        target = matches[0]
-        self.cart.append({"name": target['name'], "price": target['price'], "qty": quantity})
-        return f"Added {quantity} {target['name']} to cart."
-
-    # --- TOOL 2: VIEW CART ---
-    @function_tool
-    async def get_cart_status(self):
-        """Shows current cart items."""
-        if not self.cart: return "Your cart is empty."
-        items_list = "\n".join([f"- {i['qty']}x {i['name']}" for i in self.cart])
-        total = sum(i['price'] * i['qty'] for i in self.cart)
-        return f"Cart:\n{items_list}\nTotal: ${total:.2f}"
-
-    # --- TOOL 3: PLACE ORDER (SAVES TO JSON) ---
-    @function_tool
-    async def place_order(self, customer_name: Annotated[str, "Name"]):
-        """Places the order and saves to JSON."""
-        if not self.cart: return "Cart is empty!"
+        # Ensure directory exists
+        os.makedirs(parent_dir, exist_ok=True)
         
-        total = sum(i['price'] * i['qty'] for i in self.cart)
-        # Create Order Data with Timestamp
-        order_data = {
-            "order_id": f"ORD-{int(datetime.now().timestamp())}",
-            "timestamp": datetime.now().isoformat(), # Save time for tracking logic
-            "customer": customer_name,
-            "items": self.cart,
-            "total": total,
-            "status": "Received" 
-        }
-
-        # Append to orders.json
-        file_path = "orders.json"
-        history = []
-        if os.path.exists(file_path):
-            try:
-                with open(file_path, "r") as f: history = json.load(f)
-            except: pass
-        
-        history.append(order_data)
-        with open(file_path, "w") as f: json.dump(history, f, indent=2)
-        
-        self.cart = [] # Clear cart
-        return f"Order placed! ID: {order_data['order_id']}. You can ask me to track it."
-
-    # --- TOOL 4: ADVANCED TRACKING (MOCK TIME LOGIC) ---
-    @function_tool
-    async def track_order(self):
-        """Checks the status of the most recent order based on time passed."""
-        file_path = "orders.json"
-        if not os.path.exists(file_path): return "No orders found."
+        save_path = os.path.join(parent_dir, "game_state.json")
+        current_state_json = self.game.to_json()
         
         try:
-            with open(file_path, "r") as f: history = json.load(f)
-            if not history: return "No orders found."
-            
-            # Get latest order
-            latest_order = history[-1]
-            order_time = datetime.fromisoformat(latest_order["timestamp"])
-            time_diff = datetime.now() - order_time
-            
-            # Mock Logic: Update status based on how much time passed
-            new_status = latest_order["status"]
-            if time_diff > timedelta(seconds=120): # 2 mins later
-                new_status = "Delivered 🏠"
-            elif time_diff > timedelta(seconds=60): # 1 min later
-                new_status = "Out for Delivery 🛵"
-            elif time_diff > timedelta(seconds=30): # 30 secs later
-                new_status = "Being Prepared 🍳"
-            
-            # Save update if changed
-            if new_status != latest_order["status"]:
-                latest_order["status"] = new_status
-                with open(file_path, "w") as f: json.dump(history, f, indent=2)
-            
-            return f"Order Status for {latest_order['customer']}: {new_status}"
-            
+            with open(save_path, "w") as f:
+                f.write(current_state_json)
+            logger.info(f"✅ SAVED JSON TO: {save_path}")
+            logger.info(f"📄 Content: {current_state_json}")
         except Exception as e:
-            return f"Error tracking order: {e}"
+            logger.error(f"❌ Failed to save file: {e}")
+            logger.error(f"Attempted path: {save_path}")
 
-# --- SETUP ---
+    @function_tool
+    async def update_game_state(
+        self,
+        damage_taken: Annotated[int, "Amount of HP damage taken"],
+        new_location: Annotated[str, "New location name"],
+        item_found: Annotated[str, "Item to add to inventory"],
+        item_used: Annotated[str, "Item to remove from inventory"]
+    ):
+        """
+        Updates the game state. All four parameters are required (use empty strings or 0 for unused values).
+        """
+        logger.info(f"🎮 update_game_state CALLED with: damage={damage_taken}, location={new_location}, found={item_found}, used={item_used}")
+        
+        # 1. Update State Logic
+        if damage_taken > 0:
+            self.game.hp -= damage_taken
+            logger.info(f"💔 Damage taken: {damage_taken}. HP now: {self.game.hp}")
+
+        if new_location and new_location != "":
+            self.game.location = new_location
+            logger.info(f"📍 Location changed to: {new_location}")
+
+        if item_found and item_found != "":
+            self.game.inventory.append(item_found)
+            logger.info(f"📦 Item found: {item_found}")
+
+        if item_used and item_used != "" and item_used in self.game.inventory:
+            self.game.inventory.remove(item_used)
+            logger.info(f"🔥 Item used: {item_used}")
+
+        # 2. Update quest status if at Inner Keep
+        if new_location == "Inner Keep":
+            self.game.quest = "Mission Complete"
+            logger.info(f"🏆 Quest completed!")
+
+        # 3. SAVE TO FILE IMMEDIATELY
+        self._save_game_state()
+
+        current_state_json = self.game.to_json()
+        return f"STATE UPDATED. Current Status: {current_state_json}"
+
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
 async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
+
+    gm_agent = GameMaster()
+
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(model="nova-3"),
         llm=google.LLM(model="gemini-2.5-flash"),
-        tts=murf.TTS(voice="en-US-matthew", style="Conversation", tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2), text_pacing=True),
+        tts=murf.TTS(
+            voice="en-US-terrell", 
+            style="Promo",
+            tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
+            text_pacing=True
+        ),
         turn_detection=MultilingualModel(),
     )
-    await session.start(agent=GrocerAgent(), room=ctx.room, room_input_options=RoomInputOptions(noise_cancellation=noise_cancellation.BVC()))
+
+    await session.start(
+        agent=gm_agent,
+        room=ctx.room,
+        room_input_options=RoomInputOptions(
+            noise_cancellation=noise_cancellation.BVC(),
+        ),
+    )
+
     await ctx.connect()
 
 if __name__ == "__main__":
