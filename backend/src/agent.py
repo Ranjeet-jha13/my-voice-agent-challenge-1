@@ -1,7 +1,5 @@
 import logging
-import json
-import os
-from typing import Annotated
+from typing import Annotated, Optional
 from dotenv import load_dotenv
 
 from livekit.agents import (
@@ -17,127 +15,98 @@ from livekit.agents import (
 )
 from livekit.plugins import murf, silero, google, deepgram, noise_cancellation
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
+from merchant import MerchantAPI
 
 load_dotenv(".env.local")
 logger = logging.getLogger("agent")
 
-# --- GAME STATE CLASS ---
-class GameState:
-    def __init__(self):
-        self.hp = 100
-        self.inventory = ["Signal Flare", "Rusty Blade"]
-        self.location = "Outer Wall"
-        self.quest = "Survive"
+# Initialize the Merchant System
+merchant = MerchantAPI()
 
-    def to_json(self):
-        return json.dumps({
-            "hp": self.hp,
-            "inventory": self.inventory,
-            "location": self.location,
-            "quest": self.quest
-        }, indent=2)
-
-class GameMaster(Agent):
+class CommerceAgent(Agent):
     def __init__(self):
-        self.game = GameState()
-        
-        # Save initial state immediately when game starts
-        self._save_game_state()
-        
         super().__init__(
-            instructions=f"""You are a Scripted Game Master for an Attack on Titan demo.
+            instructions="""You are 'ShopBot', an AI Shopping Assistant powered by the Agentic Commerce Protocol.
             
-            Your job is to follow this EXACT script sequence. Do not deviate.
+            YOUR JOB:
+            Help users browse the catalog, find deals, and place orders.
             
-            SCENE 1 (Start):
-            - Describe the windy Outer Wall.
-            - Ask: "What do you do?"
+            CAPABILITIES:
+            1. Browse: Use `search_catalog` to find items.
+               - If a user asks for "hoodies", search for "hoodie".
+               - If they ask for "electronics", use category="electronics".
+               - Always call the search_catalog function when users ask about products.
             
-            SCENE 2 (Trigger: User says "Scan" or "Look"):
-            - Say: "You spot a 15-meter Titan gripping the wall! It sees you."
-            - Ask: "What do you do?"
+            2. Buy: Use `place_order` when the user confirms a purchase.
+               - Ask for the quantity if not specified.
+               - Ask for their name if you don't know it.
             
-            SCENE 3 (Trigger: User says "Flare" or "Signal"):
-            - CALL TOOL: `update_game_state` with ALL FOUR parameters: damage_taken=0, new_location="", item_found="", item_used="Signal Flare".
-            - Say: "The red flare shoots up! But the Titan swipes at you!"
-            - Ask: "What do you do?"
+            3. History: Use `check_last_order` if they ask "What did I buy?".
             
-            SCENE 4 (Trigger: User says "Attack" or "Blade"):
-            - CALL TOOL: `update_game_state` with ALL FOUR parameters: damage_taken=20, new_location="", item_found="", item_used="Rusty Blade".
-            - Say: "You slash its hand, but the steam burns you! You take 20 damage."
-            - Ask: "What do you do?"
+            IMPORTANT: Always use the tools/functions available to you. Don't just talk about products - actually search for them.
             
-            SCENE 5 (Trigger: User says "Retreat" or "Inner Keep"):
-            - CALL TOOL: `update_game_state` with ALL FOUR parameters: damage_taken=0, new_location="Inner Keep", item_found="", item_used="".
-            - Say: "You grapple away to the Inner Keep. You are safe. Mission Complete."
-            - STOP TALKING.
-            
-            IMPORTANT: When calling update_game_state, ALWAYS provide all four parameters. Use empty strings ("") or 0 for unused parameters.
-            
-            Current State: {self.game.to_json()}
+            TONE: Efficient, polite, and transactional.
             """,
         )
 
-    def _save_game_state(self):
-        """Helper method to save game state to JSON file"""
-        current_dir = os.path.dirname(os.path.abspath(__file__))  # src
-        parent_dir = os.path.dirname(current_dir)  # backend
-        
-        # Ensure directory exists
-        os.makedirs(parent_dir, exist_ok=True)
-        
-        save_path = os.path.join(parent_dir, "game_state.json")
-        current_state_json = self.game.to_json()
-        
-        try:
-            with open(save_path, "w") as f:
-                f.write(current_state_json)
-            logger.info(f"✅ SAVED JSON TO: {save_path}")
-            logger.info(f"📄 Content: {current_state_json}")
-        except Exception as e:
-            logger.error(f"❌ Failed to save file: {e}")
-            logger.error(f"Attempted path: {save_path}")
-
+    # --- TOOL 1: BROWSE ---
     @function_tool
-    async def update_game_state(
-        self,
-        damage_taken: Annotated[int, "Amount of HP damage taken"],
-        new_location: Annotated[str, "New location name"],
-        item_found: Annotated[str, "Item to add to inventory"],
-        item_used: Annotated[str, "Item to remove from inventory"]
+    async def search_catalog(
+        self, 
+        query: Annotated[str, "Search keyword (e.g. 'hoodie', 'keyboard', 'mug')"] = "",
+        category: Annotated[Optional[str], "Category filter: 'clothing', 'electronics', or 'home'"] = None,
+        max_price: Annotated[Optional[str], "Maximum price filter in dollars"] = None
     ):
-        """
-        Updates the game state. All four parameters are required (use empty strings or 0 for unused values).
-        """
-        logger.info(f"🎮 update_game_state CALLED with: damage={damage_taken}, location={new_location}, found={item_found}, used={item_used}")
+        """Search for products in the catalog. Use this whenever a user asks about products."""
+        # Handle optional parameters
+        if category is None:
+            category = ""
+        if max_price is None or max_price == "":
+            max_price = "10000"
         
-        # 1. Update State Logic
-        if damage_taken > 0:
-            self.game.hp -= damage_taken
-            logger.info(f"💔 Damage taken: {damage_taken}. HP now: {self.game.hp}")
+        logger.info(f"🔎 Searching: q='{query}' cat='{category}' price='{max_price}'")
+        
+        results = merchant.search_products(query, category, max_price)
+        
+        if not results:
+            return "No products found matching those criteria."
+        
+        summary = "Found these items:\n"
+        for p in results:
+            attrs = p.get('attributes', {})
+            attr_str = ", ".join([f"{k}: {v}" for k,v in attrs.items()])
+            summary += f"- {p['name']} (${p['price']}) [{attr_str}]\n"
+            
+        return summary
 
-        if new_location and new_location != "":
-            self.game.location = new_location
-            logger.info(f"📍 Location changed to: {new_location}")
+    # --- TOOL 2: BUY ---
+    @function_tool
+    async def place_order(
+        self, 
+        product_name: Annotated[str, "Name of product to buy"],
+        customer_name: Annotated[str, "Name of the customer"],
+        quantity: Annotated[int, "Quantity to purchase"] = 1
+    ):
+        """Places an order and saves it to the backend."""
+        logger.info(f"🛒 Ordering: {quantity}x {product_name} for {customer_name}")
+        
+        result = merchant.create_order(product_name, quantity, customer_name)
+        
+        if "error" in result:
+            return f"Error: {result['error']}"
+        
+        return f"✅ Order Confirmed! ID: {result['order_id']}. Total: ${result['total_amount']} {result['currency']}."
 
-        if item_found and item_found != "":
-            self.game.inventory.append(item_found)
-            logger.info(f"📦 Item found: {item_found}")
-
-        if item_used and item_used != "" and item_used in self.game.inventory:
-            self.game.inventory.remove(item_used)
-            logger.info(f"🔥 Item used: {item_used}")
-
-        # 2. Update quest status if at Inner Keep
-        if new_location == "Inner Keep":
-            self.game.quest = "Mission Complete"
-            logger.info(f"🏆 Quest completed!")
-
-        # 3. SAVE TO FILE IMMEDIATELY
-        self._save_game_state()
-
-        current_state_json = self.game.to_json()
-        return f"STATE UPDATED. Current Status: {current_state_json}"
+    # --- TOOL 3: HISTORY ---
+    @function_tool
+    async def check_last_order(self):
+        """Retrieves the details of the last order placed."""
+        order = merchant.get_last_order()
+        if not order:
+            return "You haven't placed any orders yet."
+            
+        item = order['items'][0]
+        return f"Your last order was for {item['quantity']}x {item['name']} on {order['timestamp']}. Total: ${order['total_amount']}."
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
@@ -145,14 +114,12 @@ def prewarm(proc: JobProcess):
 async def entrypoint(ctx: JobContext):
     ctx.log_context_fields = {"room": ctx.room.name}
 
-    gm_agent = GameMaster()
-
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(model="nova-3"),
-        llm=google.LLM(model="gemini-2.5-flash"),
+        llm=google.LLM(model="gemini-2.5-flash"),  # Using latest Gemini model
         tts=murf.TTS(
-            voice="en-US-terrell", 
+            voice="en-US-terrell",
             style="Promo",
             tokenizer=tokenize.basic.SentenceTokenizer(min_sentence_len=2),
             text_pacing=True
@@ -161,7 +128,7 @@ async def entrypoint(ctx: JobContext):
     )
 
     await session.start(
-        agent=gm_agent,
+        agent=CommerceAgent(),
         room=ctx.room,
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVC(),

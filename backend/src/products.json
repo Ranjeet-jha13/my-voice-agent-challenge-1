@@ -1,0 +1,147 @@
+[
+  {
+    "id": "prod_001",
+    "name": "Mechanical Gaming Keyboard",
+    "price": 89.99,
+    "currency": "USD",
+    "category": "electronics",
+    "attributes": {
+      "type": "keyboard",
+      "switches": "mechanical blue",
+      "backlight": "RGB",
+      "features": "cool gaming peripheral programmable macro keys",
+      "color": "black",
+      "brand": "TechPro"
+    }
+  },
+  {
+    "id": "prod_002",
+    "name": "Wireless Gaming Mouse",
+    "price": 49.99,
+    "currency": "USD",
+    "category": "electronics",
+    "attributes": {
+      "type": "mouse",
+      "connectivity": "wireless bluetooth",
+      "dpi": "16000",
+      "features": "cool ergonomic design gaming precision sensor",
+      "color": "black",
+      "brand": "TechPro"
+    }
+  },
+  {
+    "id": "prod_003",
+    "name": "Developer Hoodie",
+    "price": 45.00,
+    "currency": "USD",
+    "category": "clothing",
+    "attributes": {
+      "color": "black",
+      "sizes": "S M L XL",
+      "material": "cotton blend premium quality",
+      "style": "casual tech wear",
+      "features": "comfortable warm cozy developer coder programmer",
+      "design": "minimalist with code snippet print"
+    }
+  },
+  {
+    "id": "prod_004",
+    "name": "Tech Enthusiast Hoodie",
+    "price": 55.00,
+    "currency": "USD",
+    "category": "clothing",
+    "attributes": {
+      "color": "gray charcoal",
+      "sizes": "S M L XL",
+      "material": "polyester fleece",
+      "style": "modern tech fashion",
+      "features": "comfortable stylish tech-themed",
+      "design": "circuit board pattern"
+    }
+  },
+  {
+    "id": "prod_005",
+    "name": "Programmer Coffee Mug",
+    "price": 12.99,
+    "currency": "USD",
+    "category": "home",
+    "attributes": {
+      "material": "ceramic",
+      "color": "white with black text",
+      "capacity": "350ml",
+      "features": "funny coding jokes developer gift",
+      "design": "code snippet print dishwasher safe"
+    }
+  },
+  {
+    "id": "prod_006",
+    "name": "USB-C Hub Adapter",
+    "price": 34.99,
+    "currency": "USD",
+    "category": "electronics",
+    "attributes": {
+      "type": "adapter hub",
+      "ports": "HDMI USB3.0 SD card ethernet",
+      "features": "cool useful essential tech accessory multi-port",
+      "compatibility": "laptop macbook PC",
+      "color": "aluminum silver"
+    }
+  },
+  {
+    "id": "prod_007",
+    "name": "Noise Cancelling Headphones",
+    "price": 129.99,
+    "currency": "USD",
+    "category": "electronics",
+    "attributes": {
+      "type": "headphones audio",
+      "features": "cool amazing premium active noise cancellation wireless bluetooth",
+      "battery": "30 hours",
+      "color": "black matte finish",
+      "brand": "AudioPro"
+    }
+  },
+  {
+    "id": "prod_008",
+    "name": "RGB Desk Lamp",
+    "price": 39.99,
+    "currency": "USD",
+    "category": "home",
+    "attributes": {
+      "type": "lamp lighting",
+      "features": "cool adjustable RGB colors smart control",
+      "power": "USB powered",
+      "color": "black with RGB capability",
+      "design": "modern minimalist"
+    }
+  },
+  {
+    "id": "prod_009",
+    "name": "Coding Hoodie Premium",
+    "price": 65.00,
+    "currency": "USD",
+    "category": "clothing",
+    "attributes": {
+      "color": "navy blue dark",
+      "sizes": "S M L XL XXL",
+      "material": "organic cotton premium",
+      "style": "tech fashion developer wear",
+      "features": "comfortable soft high-quality coding developer",
+      "design": "elegant code typography"
+    }
+  },
+  {
+    "id": "prod_010",
+    "name": "Mechanical Numpad",
+    "price": 29.99,
+    "currency": "USD",
+    "category": "electronics",
+    "attributes": {
+      "type": "keyboard numpad accessory",
+      "switches": "mechanical",
+      "features": "useful portable compact cool gadget",
+      "connectivity": "USB wired",
+      "color": "black"
+    }
+  }
+]
